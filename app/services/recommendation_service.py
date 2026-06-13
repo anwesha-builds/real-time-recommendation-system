@@ -1,5 +1,4 @@
 from sqlalchemy.orm import Session
-from sqlalchemy import func
 
 from app.models.interaction import (
     InteractionEvent
@@ -22,8 +21,10 @@ def get_recommendations(
     db: Session
 ):
 
+
     # Step 1:
-    # Get user interactions
+    # Get historical interactions
+
 
     interactions = (
         db.query(
@@ -42,11 +43,7 @@ def get_recommendations(
         .all()
     )
 
-    
-    # Step 2:
-    # Calculate genre scores
-
-    genre_scores = {}
+    historical_scores = {}
 
     for interaction, genre in interactions:
 
@@ -55,26 +52,114 @@ def get_recommendations(
             0
         )
 
-        if genre not in genre_scores:
-            genre_scores[genre] = 0
+        if genre not in historical_scores:
+            historical_scores[genre] = 0
 
-        genre_scores[genre] += score
+        historical_scores[genre] += score
 
-    # Sort genres by score
 
-    sorted_genres = sorted(
-        genre_scores.items(),
-        key=lambda x: x[1],
-        reverse=True
+    # Step 2:
+    # Get latest session
+
+
+    latest_session = (
+        db.query(
+            InteractionEvent.session_id
+        )
+        .filter(
+            InteractionEvent.user_id
+            == user_id
+        )
+        .order_by(
+            InteractionEvent.timestamp.desc()
+        )
+        .first()
     )
 
-    favorite_genres = [
-        genre[0]
-        for genre in sorted_genres[:5]
-    ]
+    session_scores = {}
+
+    if latest_session:
+
+        session_interactions = (
+            db.query(
+                InteractionEvent,
+                Content.genre
+            )
+            .join(
+                Content,
+                InteractionEvent.content_id
+                == Content.id
+            )
+            .filter(
+                InteractionEvent.user_id
+                == user_id
+            )
+            .filter(
+                InteractionEvent.session_id
+                == latest_session[0]
+            )
+            .all()
+        )
+
+        for interaction, genre in (
+            session_interactions
+        ):
+
+            score = EVENT_WEIGHTS.get(
+                interaction.event_type,
+                0
+            )
+
+            if genre not in session_scores:
+                session_scores[genre] = 0
+
+            session_scores[genre] += score
+
 
     # Step 3:
-    # Already watched content
+    # Combine scores
+
+
+    final_scores = {}
+
+    all_genres = set(
+        historical_scores.keys()
+    ).union(
+        session_scores.keys()
+    )
+
+    for genre in all_genres:
+
+        historical = (
+            historical_scores.get(
+                genre,
+                0
+            )
+        )
+
+        session = (
+            session_scores.get(
+                genre,
+                0
+            )
+        )
+
+        final_scores[genre] = (
+            historical * 0.6
+            +
+            session * 0.4
+        )
+
+    favorite_genres = sorted(
+        final_scores,
+        key=final_scores.get,
+        reverse=True
+    )[:5]
+
+
+    # Step 4:
+    # Remove watched content
+
 
     watched_content = (
         db.query(
@@ -87,9 +172,10 @@ def get_recommendations(
         .subquery()
     )
 
-    
-    # Step 4:
-    # Fetch candidate content
+
+    # Step 5:
+    # Fetch recommendations
+
 
     recommendations = (
         db.query(Content)
