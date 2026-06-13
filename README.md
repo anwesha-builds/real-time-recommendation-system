@@ -271,7 +271,7 @@ GET /recommendations/{user_id}
 Returns personalized recommendations.
 
 ---
-<img src="screenshots/recommendation API output.png" width="800">
+<img src="screenshots/recommendation_API_output.png" width="800">
 
 ## Analytics
 
@@ -286,7 +286,7 @@ Returns:
 * Skip rate
 
 ---
-<img src="screenshots/analytics output.png" width="800">
+<img src="screenshots/analytics_output.png" width="800">
 
 # Installation
 
