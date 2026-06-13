@@ -35,3 +35,5 @@ class InteractionEvent(Base):
         DateTime,
         default=datetime.utcnow
     )
+
+    session_id = Column(String)

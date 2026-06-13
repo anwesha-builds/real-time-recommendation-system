@@ -12,3 +12,5 @@ class Content(Base):
     duration = Column(Integer)
     language = Column(String)
     rating = Column(Float)
+
+    content_type = Column( String, nullable=False)

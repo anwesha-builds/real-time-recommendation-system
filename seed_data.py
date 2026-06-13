@@ -29,7 +29,7 @@ from app.models.interaction import InteractionEvent
 # ──────────────────────────────────────────────
 NUM_USERS        = 250
 NUM_CONTENT      = 800
-NUM_INTERACTIONS = 40_000
+NUM_INTERACTIONS = 15_000
 BATCH_SIZE       = 1_000   # rows flushed per batch
 
 random.seed(42)
@@ -272,22 +272,37 @@ def generate_content(n):
 
     items = []
 
-    def _expand(templates, count):
+    def _expand(templates, count, content_type):
         for _ in range(count):
             title, genre, tags, dur_range, lang = random.choice(templates)
             suffix = random.randint(1, 9999)
             items.append({
-                "title":    f"{title} #{suffix}",
-                "genre":    genre,
-                "tags":     tags,
+                "title": f"{title} #{suffix}",
+                "genre": genre,
+                "tags": tags,
                 "duration": random.randint(*dur_range),
                 "language": lang,
-                "rating":   round(random.uniform(2.5, 5.0), 1),
+                "rating": round(random.uniform(2.5, 5.0), 1),
+
+                "content_type": content_type
             })
 
-    _expand(MOVIE_ENTRIES, movie_count)
-    _expand(MUSIC_ENTRIES, music_count)
-    _expand(VIDEO_ENTRIES, video_count)
+    _expand(
+        MOVIE_ENTRIES,
+        movie_count,
+        "movie"
+    )
+
+    _expand(
+        MUSIC_ENTRIES,
+        music_count,
+        "music")
+
+    _expand(
+        VIDEO_ENTRIES,
+        video_count,
+        "video"
+    )
 
     random.shuffle(items)
     return items
@@ -305,6 +320,7 @@ def generate_interactions(user_rows, content_rows, n):
     user_personas = {u.id: _pick_persona() for u in user_rows}
 
     interactions = []
+    session_counter = 1
     for _ in range(n):
         user    = random.choice(user_rows)
         persona = user_personas[user.id]
@@ -318,12 +334,15 @@ def generate_interactions(user_rows, content_rows, n):
             content_id = random.choice(all_content_ids)
 
         interactions.append({
-            "user_id":    user.id,
+            "user_id": user.id,
             "content_id": content_id,
             "event_type": _weighted_event(persona["event_weights"]),
-            "timestamp":  _random_timestamp(),
+            "timestamp": _random_timestamp(),
+            "session_id": f"session_{session_counter}"
         })
 
+        if random.random() < 0.05:
+            session_counter += 1
     return interactions
 
 
