@@ -8,15 +8,16 @@ from app.models.interaction import (
 )
 
 from app.routes.interaction_routes import (
-    router as interaction_router
-)
+    router as interaction_router)
+from app.routes.recommendation_routes import (
+    router as recommendation_router)
 
 Base.metadata.create_all(bind=engine)
 
 app = FastAPI()
 
 app.include_router(interaction_router)
-
+app.include_router(recommendation_router)
 
 @app.get("/")
 def home():
