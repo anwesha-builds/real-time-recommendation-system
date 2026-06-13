@@ -7,21 +7,31 @@ from app.models.interaction import (
 from app.models.content import Content
 
 
+EVENT_WEIGHTS = {
+    "like": 5,
+    "watch_complete": 4,
+    "play": 2,
+    "pause": 1,
+    "skip": -3,
+    "dislike": -5
+}
+
+
 def get_recommendations(
     user_id: int,
     db: Session
 ):
 
     # Step 1:
-    # Find user's favorite genres
+    # Get user interactions
 
-    favorite_genres = (
+    interactions = (
         db.query(
-            Content.genre,
-            func.count().label("count")
+            InteractionEvent,
+            Content.genre
         )
         .join(
-            InteractionEvent,
+            Content,
             InteractionEvent.content_id
             == Content.id
         )
@@ -29,19 +39,42 @@ def get_recommendations(
             InteractionEvent.user_id
             == user_id
         )
-        .group_by(Content.genre)
-        .order_by(func.count().desc())
-        .limit(5)
         .all()
     )
 
-    genre_names = [
+    
+    # Step 2:
+    # Calculate genre scores
+
+    genre_scores = {}
+
+    for interaction, genre in interactions:
+
+        score = EVENT_WEIGHTS.get(
+            interaction.event_type,
+            0
+        )
+
+        if genre not in genre_scores:
+            genre_scores[genre] = 0
+
+        genre_scores[genre] += score
+
+    # Sort genres by score
+
+    sorted_genres = sorted(
+        genre_scores.items(),
+        key=lambda x: x[1],
+        reverse=True
+    )
+
+    favorite_genres = [
         genre[0]
-        for genre in favorite_genres
+        for genre in sorted_genres[:5]
     ]
 
-    # Step 2:
-    # Find content user already watched
+    # Step 3:
+    # Already watched content
 
     watched_content = (
         db.query(
@@ -54,13 +87,15 @@ def get_recommendations(
         .subquery()
     )
 
-    # Step 3:
-    # Recommend unseen content
+    
+    # Step 4:
+    # Fetch candidate content
+
     recommendations = (
         db.query(Content)
         .filter(
             Content.genre.in_(
-                genre_names
+                favorite_genres
             )
         )
         .filter(
@@ -68,8 +103,14 @@ def get_recommendations(
                 watched_content
             )
         )
-        .limit(10)
+        .order_by(
+            Content.rating.desc()
+        )
+        .limit(20)
         .all()
     )
 
-    return recommendations
+    # Step 5:
+    # Return top 10
+
+    return recommendations[:10]
