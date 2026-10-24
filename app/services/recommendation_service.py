@@ -6,6 +6,35 @@ from app.models.interaction import (
 from app.models.content import Content
 from app.redis_client import redis_client
 from app.constants import EVENT_WEIGHTS
+from app.services.collaborative_filtering import (
+    get_collaborative_scores
+)
+
+CF_WEIGHT = 1.0
+
+
+def combine_genre_scores(historical_scores, session_scores):
+    """Pure function (no DB/Redis) so it's easy to unit test."""
+
+    all_genres = set(
+        historical_scores.keys()
+    ).union(
+        session_scores.keys()
+    )
+
+    final_scores = {}
+
+    for genre in all_genres:
+        historical = historical_scores.get(genre, 0)
+        session = session_scores.get(genre, 0)
+
+        final_scores[genre] = (
+            historical * 0.6
+            +
+            session * 0.4
+        )
+
+    return final_scores
 
 
 def get_recommendations(
@@ -78,35 +107,10 @@ def get_recommendations(
     # Combine scores
 
 
-    final_scores = {}
-
-    all_genres = set(
-        historical_scores.keys()
-    ).union(
-        session_scores.keys()
+    final_scores = combine_genre_scores(
+        historical_scores,
+        session_scores
     )
-
-    for genre in all_genres:
-
-        historical = (
-            historical_scores.get(
-                genre,
-                0
-            )
-        )
-
-        session = (
-            session_scores.get(
-                genre,
-                0
-            )
-        )
-
-        final_scores[genre] = (
-            historical * 0.6
-            +
-            session * 0.4
-        )
 
     favorite_genres = sorted(
         final_scores,
@@ -132,10 +136,10 @@ def get_recommendations(
 
 
     # Step 5:
-    # Fetch recommendations
+    # Fetch a candidate pool (content-based: genre + rating)
 
 
-    recommendations = (
+    candidates = (
         db.query(Content)
         .filter(
             Content.genre.in_(
@@ -150,11 +154,28 @@ def get_recommendations(
         .order_by(
             Content.rating.desc()
         )
-        .limit(20)
+        .limit(30)
         .all()
     )
 
-    # Step 5:
-    # Return top 10
+    # Step 6:
+    # Re-rank candidates with a collaborative-filtering signal
+    # (how similar each candidate is to content this user already
+    # liked, based on other users' interaction patterns)
 
-    return recommendations[:10]
+    cf_scores = get_collaborative_scores(
+        db,
+        user_id,
+        [item.id for item in candidates]
+    )
+
+    ranked = sorted(
+        candidates,
+        key=lambda item: (
+            item.rating
+            + cf_scores.get(item.id, 0.0) * CF_WEIGHT
+        ),
+        reverse=True
+    )
+
+    return ranked[:10]
