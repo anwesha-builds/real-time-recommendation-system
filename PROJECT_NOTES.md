@@ -47,7 +47,15 @@ Client
                                                   |
                                                   v
                                    top genres -> query Content table
-                                   -> exclude already-watched -> top 10
+                                   -> exclude already-watched -> 30 candidates
+                                                  |
+                                                  v
+                                   collaborative_filtering.py:
+                                   item-item cosine similarity vs. content
+                                   the user already liked -> CF score
+                                                  |
+                                                  v
+                                   re-rank by (rating + CF score) -> top 10
                                                   |
                                                   v
                                    cache in Redis (60s TTL) -> return
@@ -59,9 +67,11 @@ Client
 - `app/constants.py` — `EVENT_WEIGHTS`, now the single source of truth (was duplicated before)
 - `app/routes/interaction_routes.py` — **producer**: validates an event and pushes it to the Redis queue, returns immediately
 - `app/services/event_consumer.py` — **consumer**: background thread that pops events off the queue, writes them to Postgres, and updates live Redis state (session score, latest session, cache invalidation)
-- `app/services/recommendation_service.py` — scoring logic: historical score from Postgres (full history) blended with session score read from Redis (live, no DB hit)
+- `app/services/recommendation_service.py` — scoring logic: historical score from Postgres (full history) blended with session score read from Redis (live, no DB hit), then candidates are re-ranked using the collaborative-filtering signal
+- `app/services/collaborative_filtering.py` — builds a user-item interaction matrix and item-item cosine similarity (pandas + scikit-learn), cached in-process and rebuilt every 10 minutes; exposes a pure `score_candidates()` function (no DB) that's unit tested directly
 - `app/routes/recommendation_routes.py` — HTTP layer + response cache (60s TTL)
 - `app/routes/analytics_routes.py` — unchanged, still pure Postgres aggregation
+- `tests/` — pytest unit tests for the pure scoring functions (`combine_genre_scores`, `score_candidates`) — no DB/Redis required to run them
 
 ---
 
@@ -99,16 +109,44 @@ dataset generator (250 users / 800 content / 15k events).
   confirmed `session_score` hash updated -> confirmed the row landed in Postgres -> confirmed
   `GET /recommendations` re-ranked using the new session score and cache correctly invalidated
 
+### Step 4 — Hybrid ranking with collaborative filtering
+- Added `app/services/collaborative_filtering.py`: builds a user-item interaction matrix
+  (sum of `EVENT_WEIGHTS` per user/content pair) from Postgres, computes item-item cosine
+  similarity with scikit-learn, and caches both in-process for 10 minutes
+- `recommendation_service.py` now fetches 30 genre-matched candidates (was 20, returned
+  10) and re-ranks them by `rating + collaborative_filtering_score`, so content similar to
+  what the user already liked (based on other users' behavior) gets boosted ahead of
+  content that's merely genre-matched and highly rated
+- **Why:** this is the "collaborative/content-based ranking" and "hybrid recommendation
+  model" piece — previously the system was purely content-based (genre + rating), with no
+  signal from other users' behavior at all
+- Extracted `combine_genre_scores()` (step 3 logic) and `score_candidates()` (CF logic) as
+  pure functions with no DB/Redis dependency, specifically so they're unit-testable
+- **Verified:** manual run against the seeded dataset — recommendations re-rank after a new
+  event lands, and the CF score materially changes the top-10 ordering vs. rating alone;
+  added `tests/test_recommendation_scoring.py` and `tests/test_collaborative_filtering.py`
+  (6 tests, all passing, run with plain `pytest`, no live DB/Redis needed)
+
+### Step 5 — README + test polish
+- Updated `README.md`: accurate architecture diagram (producer-consumer + Redis + hybrid
+  ranking), tech stack, event/recommendation endpoint descriptions, install steps (Redis
+  requirement, running tests), challenges/future-improvements/learning-outcomes sections
+  rewritten to match what's actually built now
+- Added `.pytest_cache/` to `.gitignore`
+
 ---
 
 ## 3. What's next (not yet built)
 
-- **Step 4 — Simple collaborative filtering:** item-item cosine similarity over the
-  user-item interaction matrix (plain pandas/numpy), blended as a second signal alongside
-  the existing genre-weighted score. Covers the "collaborative/content-based ranking" claim.
-- **Step 5 — Polish for presentation:** update README with the real architecture diagram,
-  add a handful of pytest tests (scoring function, producer, consumer), optionally a
-  Dockerfile/docker-compose for a one-command demo.
+- **Docker deployment:** Dockerfile + docker-compose for Postgres + Redis + app, so the
+  whole thing runs with one command instead of three manual installs
+- **Recommendation explainability:** a `"why"` field in the response (e.g. "similar to
+  content you liked" vs. "popular in your favorite genre")
+- **Cross-genre CF candidates:** currently CF only re-ranks within the genre-matched pool;
+  it could also surface candidates outside the user's top genres that are strongly similar
+  to liked content
+- **CI:** GitHub Actions running `pytest` on every push
+- **Basic auth / rate limiting** on the API endpoints
 
 ---
 
@@ -120,3 +158,8 @@ dataset generator (250 users / 800 content / 15k events).
   eventually-consistent — a `POST /event` response doesn't guarantee the row exists in
   Postgres yet, only that it's queued. Acceptable for this project's scale.
 - `session_score` Redis hashes expire after 1 hour to avoid unbounded growth across sessions.
+- The item-item similarity matrix is rebuilt from the full interaction history every 10
+  minutes and kept in process memory (not Redis) — simple and fast enough at this dataset
+  size (250 users / 800 items / ~15k events); wouldn't scale as-is to a much larger catalog.
+- Collaborative filtering only re-ranks within the genre-matched candidate pool rather than
+  sourcing its own candidates — keeps the two signals easy to reason about independently.
