@@ -4,16 +4,8 @@ from app.models.interaction import (
     InteractionEvent
 )
 from app.models.content import Content
-
-
-EVENT_WEIGHTS = {
-    "like": 5,
-    "watch_complete": 4,
-    "play": 2,
-    "pause": 1,
-    "skip": -3,
-    "dislike": -5
-}
+from app.redis_client import redis_client
+from app.constants import EVENT_WEIGHTS
 
 
 def get_recommendations(
@@ -59,61 +51,27 @@ def get_recommendations(
 
 
     # Step 2:
-    # Get latest session
+    # Get latest session's live score from Redis
+    # (updated in real time by the event consumer instead
+    # of being recomputed from Postgres on every request)
 
 
-    latest_session = (
-        db.query(
-            InteractionEvent.session_id
-        )
-        .filter(
-            InteractionEvent.user_id
-            == user_id
-        )
-        .order_by(
-            InteractionEvent.timestamp.desc()
-        )
-        .first()
+    latest_session_id = redis_client.get(
+        f"latest_session:{user_id}"
     )
 
     session_scores = {}
 
-    if latest_session:
+    if latest_session_id:
 
-        session_interactions = (
-            db.query(
-                InteractionEvent,
-                Content.genre
-            )
-            .join(
-                Content,
-                InteractionEvent.content_id
-                == Content.id
-            )
-            .filter(
-                InteractionEvent.user_id
-                == user_id
-            )
-            .filter(
-                InteractionEvent.session_id
-                == latest_session[0]
-            )
-            .all()
+        raw_scores = redis_client.hgetall(
+            f"session_score:{user_id}:{latest_session_id}"
         )
 
-        for interaction, genre in (
-            session_interactions
-        ):
-
-            score = EVENT_WEIGHTS.get(
-                interaction.event_type,
-                0
-            )
-
-            if genre not in session_scores:
-                session_scores[genre] = 0
-
-            session_scores[genre] += score
+        session_scores = {
+            genre: float(score)
+            for genre, score in raw_scores.items()
+        }
 
 
     # Step 3:

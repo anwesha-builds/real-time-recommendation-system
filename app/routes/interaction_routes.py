@@ -1,36 +1,25 @@
-from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
+from fastapi import APIRouter
 
-from app.database import get_db
-from app.models.interaction import InteractionEvent
+from app.redis_client import redis_client
 from app.schemas.interaction_schema import (
     InteractionCreate
 )
+from app.services.event_consumer import EVENT_QUEUE_KEY
 
 router = APIRouter()
 
 
 @router.post("/event")
 def create_interaction(
-    interaction: InteractionCreate,
-    db: Session = Depends(get_db)
+    interaction: InteractionCreate
 ):
 
-    new_event = InteractionEvent(
-        user_id=interaction.user_id,
-        content_id=interaction.content_id,
-        event_type=interaction.event_type,
-        session_id=interaction.session_id
+    redis_client.rpush(
+        EVENT_QUEUE_KEY,
+        interaction.model_dump_json()
     )
-
-    db.add(new_event)
-    db.commit()
-    db.refresh(new_event)
 
     return {
         "message":
-            "Interaction event stored successfully",
-
-        "event_id":
-            new_event.id
+            "Interaction event queued successfully"
     }

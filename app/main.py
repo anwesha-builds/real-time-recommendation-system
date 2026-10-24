@@ -1,3 +1,5 @@
+import threading
+
 from fastapi import FastAPI
 from app.database import engine, Base
 
@@ -13,6 +15,7 @@ from app.routes.recommendation_routes import (
     router as recommendation_router)
 from app.routes.analytics_routes import (
     router as analytics_router)
+from app.services.event_consumer import consume_events
 
 Base.metadata.create_all(bind=engine)
 
@@ -21,6 +24,14 @@ app = FastAPI()
 app.include_router(interaction_router)
 app.include_router(recommendation_router)
 app.include_router(analytics_router)
+
+
+@app.on_event("startup")
+def start_event_consumer():
+    threading.Thread(
+        target=consume_events,
+        daemon=True
+    ).start()
 
 @app.get("/")
 def home():
